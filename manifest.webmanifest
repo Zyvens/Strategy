@@ -1,0 +1,20 @@
+{
+  "name": "Operação Transpetro",
+  "short_name": "Transpetro",
+  "description": "Campanha gamificada de estudos para o PSP 004/2026 da Transpetro.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#06110e",
+  "theme_color": "#071713",
+  "lang": "pt-BR",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
