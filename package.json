@@ -1,0 +1,9 @@
+{
+  "name": "operacao-transpetro-strategy",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.0"
+  }
+}
