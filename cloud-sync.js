@@ -1,6 +1,7 @@
 const CLOUD_PROFILE_KEY = 'transpetro_cloud_profile';
 const CLOUD_SYNC_KEY = 'transpetro_cloud_sync_key';
 const CLOUD_LAST_SYNC = 'transpetro_cloud_last_sync';
+const CLOUD_LOCAL_UPDATED = 'transpetro_cloud_local_updated';
 const CLOUD_ENABLED = 'transpetro_cloud_enabled';
 const APP_STORAGE_KEY = 'transpetro_strategy_v1';
 
@@ -40,6 +41,10 @@ async function cloudRequest(method, body) {
   return data;
 }
 
+function markLocalUpdated() {
+  localStorage.setItem(CLOUD_LOCAL_UPDATED, new Date().toISOString());
+}
+
 async function pullCloudState({ force = false } = {}) {
   if (!cloud.enabled || !cloud.syncKey || cloud.syncing) return false;
   cloud.syncing = true;
@@ -47,30 +52,39 @@ async function pullCloudState({ force = false } = {}) {
   try {
     const result = await cloudRequest('GET');
     if (!result.found) {
+      cloud.syncing = false;
       cloudStatus('Nuvem vazia — enviando este dispositivo…');
-      await pushCloudState({ force: true });
-      return true;
+      return await pushCloudState({ force: true });
     }
 
     const remote = JSON.stringify(result.state || {});
     const local = localStorage.getItem(APP_STORAGE_KEY) || '{}';
-    const lastSync = localStorage.getItem(CLOUD_LAST_SYNC) || '';
     const remoteUpdated = result.updatedAt || '';
+    const localUpdated = localStorage.getItem(CLOUD_LOCAL_UPDATED) || '';
 
-    if (force || !lastSync || remoteUpdated > lastSync || local === '{}' || local === '') {
+    if (!force && localUpdated && remoteUpdated && localUpdated > remoteUpdated && local !== remote) {
+      cloud.syncing = false;
+      cloudStatus('Alterações locais mais recentes — enviando…');
+      return await pushCloudState({ force: true });
+    }
+
+    if (force || remote !== local) {
       localStorage.setItem(APP_STORAGE_KEY, remote);
       cloud.lastLocalSnapshot = remote;
       localStorage.setItem(CLOUD_LAST_SYNC, remoteUpdated || new Date().toISOString());
+      localStorage.setItem(CLOUD_LOCAL_UPDATED, remoteUpdated || new Date().toISOString());
       cloudStatus(`Atualizado da nuvem · ${new Date(remoteUpdated || Date.now()).toLocaleString('pt-BR')}`, 'ok');
       window.dispatchEvent(new CustomEvent('transpetro-cloud-loaded', { detail: result.state }));
       setTimeout(() => window.location.reload(), 120);
       return true;
     }
 
-    cloudStatus('Dados locais já estão atualizados', 'ok');
+    localStorage.setItem(CLOUD_LAST_SYNC, remoteUpdated || new Date().toISOString());
+    if (!localUpdated) localStorage.setItem(CLOUD_LOCAL_UPDATED, remoteUpdated || new Date().toISOString());
+    cloudStatus('PC/celular sincronizados', 'ok');
     return false;
   } catch (error) {
-    cloudStatus(`Falha ao carregar: ${error.message}`, 'error');
+    cloudStatus(`Offline/local · ${error.message}`, 'error');
     return false;
   } finally {
     cloud.syncing = false;
@@ -90,8 +104,10 @@ async function pushCloudState({ force = false } = {}) {
     const state = JSON.parse(raw);
     const result = await cloudRequest('PUT', { state });
     cloud.lastLocalSnapshot = raw;
-    localStorage.setItem(CLOUD_LAST_SYNC, result.updatedAt || new Date().toISOString());
-    cloudStatus(`Salvo na nuvem · ${new Date(result.updatedAt || Date.now()).toLocaleString('pt-BR')}`, 'ok');
+    const stamp = result.updatedAt || new Date().toISOString();
+    localStorage.setItem(CLOUD_LAST_SYNC, stamp);
+    localStorage.setItem(CLOUD_LOCAL_UPDATED, stamp);
+    cloudStatus(`Salvo na nuvem · ${new Date(stamp).toLocaleString('pt-BR')}`, 'ok');
     return true;
   } catch (error) {
     cloudStatus(`Offline/local · ${error.message}`, 'error');
@@ -111,7 +127,10 @@ function watchLocalStorageChanges() {
   const originalSetItem = Storage.prototype.setItem;
   Storage.prototype.setItem = function(key, value) {
     originalSetItem.apply(this, arguments);
-    if (this === localStorage && key === APP_STORAGE_KEY) scheduleCloudPush();
+    if (this === localStorage && key === APP_STORAGE_KEY) {
+      originalSetItem.call(localStorage, CLOUD_LOCAL_UPDATED, new Date().toISOString());
+      scheduleCloudPush();
+    }
   };
 
   window.addEventListener('storage', event => {
@@ -125,6 +144,9 @@ function watchLocalStorageChanges() {
 }
 
 function injectCloudUI() {
+  const version = document.getElementById('appVersion');
+  if (version) version.textContent = '3.0.0';
+
   const config = document.getElementById('config');
   if (!config || document.getElementById('cloudSyncCard')) return;
 
@@ -134,7 +156,7 @@ function injectCloudUI() {
   card.innerHTML = `
     <span class="eyebrow">Vercel Cloud Sync</span>
     <h2>Sincronização entre dispositivos</h2>
-    <p class="muted">Use o mesmo perfil e a mesma chave no PC e no celular. O app continua funcionando offline e envia as alterações quando a conexão voltar.</p>
+    <p class="muted">Use o mesmo perfil e a mesma chave no PC e no celular. O app continua funcionando offline e sincroniza automaticamente quando a conexão voltar.</p>
     <div class="field">
       <label>Perfil na nuvem</label>
       <input id="cloudProfile" value="${cloud.profile.replace(/"/g, '&quot;')}" placeholder="vitor">
@@ -174,12 +196,15 @@ function injectCloudUI() {
       return;
     }
     const result = await cloudRequest('GET').catch(() => null);
-    if (result?.found) await pullCloudState({ force: true });
+    if (result?.found) await pullCloudState();
     else await pushCloudState({ force: true });
   };
 
   document.getElementById('cloudPull').onclick = () => pullCloudState({ force: true });
-  document.getElementById('cloudPush').onclick = () => pushCloudState({ force: true });
+  document.getElementById('cloudPush').onclick = () => {
+    markLocalUpdated();
+    pushCloudState({ force: true });
+  };
 }
 
 window.TranspetroCloud = {
@@ -191,7 +216,5 @@ window.TranspetroCloud = {
 watchLocalStorageChanges();
 window.addEventListener('DOMContentLoaded', async () => {
   injectCloudUI();
-  if (cloud.enabled && cloud.syncKey) {
-    await pullCloudState();
-  }
+  if (cloud.enabled && cloud.syncKey) await pullCloudState();
 });
